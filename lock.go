@@ -1,0 +1,97 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+	"github.com/gofrs/uuid"
+	"math/rand"
+	"time"
+)
+
+const (
+	// defaultExp default timeout for lock
+	defaultExp = 10 * time.Second
+
+	// sleepDur default sleep time for spin lock
+	sleepDur = 1 * time.Second
+)
+
+type RedisLock struct {
+	Client     RedisClient
+	Key        string
+	uuid       string
+	cancelFunc context.CancelFunc
+}
+
+// NewRedisLock new a redis distribute lock
+func NewRedisLock(client RedisClient, key string) (*RedisLock, error) {
+	id, err := uuid.NewV4()
+	if err != nil {
+		return nil, err
+	}
+
+	return &RedisLock{
+		Client: client,
+		Key:    key,
+		uuid:   id.String(),
+	}, nil
+}
+
+// TryLock attempt to lock, return true if the lock is successful, otherwise false
+func (rl *RedisLock) TryLock(ctx context.Context) (bool, error) {
+	succ, err := rl.Client.SetNX(ctx, rl.Key, rl.uuid, defaultExp).Result()
+	if err != nil || !succ {
+		return false, err
+	}
+
+	c, cancel := context.WithCancel(ctx)
+	rl.cancelFunc = cancel
+	rl.refresh(c)
+	return succ, nil
+}
+
+// SpinLock Loop `retryTimes` times to call TryLock
+func (rl *RedisLock) SpinLock(ctx context.Context, retryTimes int) (bool, error) {
+	for i := 0; i < retryTimes; i++ {
+		succ, err := rl.TryLock(ctx)
+		if err != nil {
+			return false, err
+		}
+		if succ {
+			return succ, nil
+		}
+		interval := time.Duration(rand.Intn(40)+10) * time.Millisecond
+		time.Sleep(sleepDur + interval)
+	}
+
+	return false, nil
+}
+
+// Unlock release the lock
+func (rl *RedisLock) Unlock(ctx context.Context) (bool, error) {
+	succ, err := NewTools(rl.Client).Cad(ctx, rl.Key, rl.uuid)
+	if err != nil {
+		return false, err
+	}
+
+	if succ {
+		fmt.Println("unlock")
+		rl.cancelFunc()
+	}
+	return succ, nil
+}
+
+// refresh update the expiration time of lock
+func (rl *RedisLock) refresh(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(defaultExp / 4)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rl.Client.Expire(ctx, rl.Key, defaultExp)
+			}
+		}
+	}()
+}
