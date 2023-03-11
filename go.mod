@@ -1,4 +1,4 @@
-module redis_tools
+module github.com/DarrenYing/redis_tools
 
 go 1.19
 

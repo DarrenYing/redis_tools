@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	tools "github.com/DarrenYing/redis_tools"
 	"github.com/go-redis/redis/v8"
 	"log"
-	tools "redis_tools"
 )
 
 func main() {
